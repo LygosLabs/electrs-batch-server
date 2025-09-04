@@ -18,7 +18,6 @@ const axios = require('axios')
 const express = require('express')
 const helmet = require('helmet')
 const compression = require('compression')
-const bodyParser = require('body-parser')
 const asyncHandler = require('express-async-handler')
 
 const httpError = require('./http-error')
@@ -36,8 +35,13 @@ if (NODE_ENV === 'production') {
 
 app.use(helmet())
 app.use(compression())
-app.use(bodyParser.json({ limit: '5mb' }))
+app.use(express.json({ limit: '5mb' }))
 app.set('etag', false)
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'healthy', timestamp: new Date().toISOString() })
+})
 
 app.post('/addresses', asyncHandler(async (req, res, next) => {
   let { addresses } = req.body
