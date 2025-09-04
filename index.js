@@ -115,6 +115,12 @@ if (NODE_ENV === 'production') {
 
 app.use(helmet())
 app.use(compression())
+
+// Use raw body parser for transaction broadcasting endpoints
+app.use('/tx', bodyParser.raw({ type: '*/*', limit: '1mb' }))
+app.use('/api/tx', bodyParser.raw({ type: '*/*', limit: '1mb' }))
+
+// Use JSON body parser for all other endpoints
 app.use(bodyParser.json({ limit: '5mb' }))
 app.set('etag', false)
 
@@ -629,6 +635,181 @@ app.post('/addresses/transactions', asyncHandler(async (req, res, next) => {
   }
 }))
 
+// POST /tx - Broadcast transaction (for batch mode)
+app.post('/tx', asyncHandler(async (req, res, next) => {
+  const timestamp = new Date().toISOString()
+  console.log(`[${timestamp}] /tx - Broadcasting transaction`)
+  console.log(`[${timestamp}] /tx - Request Content-Type: ${req.get('Content-Type')}`)
+  console.log(`[${timestamp}] /tx - Request body type: ${typeof req.body}`)
+  console.log(`[${timestamp}] /tx - Request body is Buffer: ${Buffer.isBuffer(req.body)}`)
+
+  // Convert buffer to string if needed
+  let txHex = req.body
+  if (Buffer.isBuffer(req.body)) {
+    txHex = req.body.toString('utf8')
+    console.log(`[${timestamp}] /tx - Converted buffer to string: ${txHex.substring(0, 100)}...`)
+  } else if (typeof req.body === 'object' && req.body !== null) {
+    console.log(`[${timestamp}] /tx - Request body (JSON): ${JSON.stringify(req.body)}`)
+  } else {
+    console.log(`[${timestamp}] /tx - Raw body: ${req.body}`)
+  }
+
+  console.log(`[${timestamp}] /tx - Final transaction hex: ${typeof txHex === 'string' ? txHex : 'NOT A STRING: ' + JSON.stringify(txHex)}`)
+
+  if (typeof txHex !== 'string' || txHex.length === 0) {
+    console.log(`[${timestamp}] /tx - Invalid transaction hex`)
+    return res.status(400).json({
+      error: 'Invalid transaction hex',
+      message: 'Transaction hex must be a non-empty string'
+    })
+  }
+
+  try {
+    const response = await electrs.post('/tx', txHex)
+    console.log(`[${timestamp}] /tx - Transaction broadcast successful: ${response.data}`)
+    res.send(response.data)
+  } catch (error) {
+    console.log(`[${timestamp}] /tx - Error broadcasting transaction: ${error.message}`)
+    console.log(`[${timestamp}] /tx - Failed transaction hex (full): ${txHex}`)
+
+    // Handle specific broadcast errors gracefully
+    if (error.response) {
+      const status = error.response.status
+      const message = error.response.data || error.message
+      console.log(`[${timestamp}] /tx - Blockstream API error: ${status} - ${message}`)
+      return res.status(status).json({
+        error: 'Transaction broadcast failed',
+        message: message,
+        status: status
+      })
+    }
+
+    throw error
+  }
+}))
+
+// GET /api/tx/:txid - Get transaction by hash (for batch mode)
+app.get('/api/tx/:txid', asyncHandler(async (req, res, next) => {
+  const { txid } = req.params
+  const timestamp = new Date().toISOString()
+  console.log(`[${timestamp}] /api/tx/${txid} - Request received`)
+
+  try {
+    const response = await electrs.get(`/tx/${txid}`)
+    res.json(response.data)
+  } catch (error) {
+    console.log(`[${timestamp}] /api/tx/${txid} - Error: ${error.message}`)
+    throw error
+  }
+}))
+
+// GET /api/tx/:txid/hex - Get raw transaction hex (for batch mode)
+app.get('/api/tx/:txid/hex', asyncHandler(async (req, res, next) => {
+  const { txid } = req.params
+  const timestamp = new Date().toISOString()
+  console.log(`[${timestamp}] /api/tx/${txid}/hex - Request received`)
+
+  try {
+    const response = await electrs.get(`/tx/${txid}/hex`)
+    res.send(response.data)
+  } catch (error) {
+    console.log(`[${timestamp}] /api/tx/${txid}/hex - Error: ${error.message}`)
+    throw error
+  }
+}))
+
+// GET /api/tx/:txid/status - Get transaction status (for batch mode)
+app.get('/api/tx/:txid/status', asyncHandler(async (req, res, next) => {
+  const { txid } = req.params
+  const timestamp = new Date().toISOString()
+  console.log(`[${timestamp}] /api/tx/${txid}/status - Request received`)
+
+  try {
+    const response = await electrs.get(`/tx/${txid}`)
+    const txData = response.data
+
+    // Transform Blockstream response to match esplora status format
+    const statusResponse = {
+      confirmed: txData.status?.confirmed || false,
+      block_height: txData.status?.block_height || null,
+      block_hash: txData.status?.block_hash || null,
+      block_time: txData.status?.block_time || null
+    }
+
+    res.json(statusResponse)
+  } catch (error) {
+    console.log(`[${timestamp}] /api/tx/${txid}/status - Error: ${error.message}`)
+    throw error
+  }
+}))
+
+// POST /api/tx - Broadcast transaction (for batch mode with /api prefix)
+app.post('/api/tx', asyncHandler(async (req, res, next) => {
+  const timestamp = new Date().toISOString()
+  console.log(`[${timestamp}] /api/tx - Broadcasting transaction`)
+  console.log(`[${timestamp}] /api/tx - Request Content-Type: ${req.get('Content-Type')}`)
+  console.log(`[${timestamp}] /api/tx - Request body type: ${typeof req.body}`)
+  console.log(`[${timestamp}] /api/tx - Request body is Buffer: ${Buffer.isBuffer(req.body)}`)
+
+  // Convert buffer to string if needed
+  let txHex = req.body
+  if (Buffer.isBuffer(req.body)) {
+    txHex = req.body.toString('utf8')
+    console.log(`[${timestamp}] /api/tx - Converted buffer to string: ${txHex.substring(0, 100)}...`)
+  } else if (typeof req.body === 'object' && req.body !== null) {
+    console.log(`[${timestamp}] /api/tx - Request body (JSON): ${JSON.stringify(req.body)}`)
+    // If body is JSON object, look for common transaction hex fields
+    if (req.body.hex) {
+      txHex = req.body.hex
+    } else if (req.body.rawTransaction) {
+      txHex = req.body.rawTransaction
+    } else if (req.body.transaction) {
+      txHex = req.body.transaction
+    } else {
+      console.log(`[${timestamp}] /api/tx - Invalid request format. Expected hex string or object with hex field`)
+      return res.status(400).json({
+        error: 'Invalid request format',
+        message: 'Expected raw transaction hex string in request body or object with hex field'
+      })
+    }
+  } else {
+    console.log(`[${timestamp}] /api/tx - Raw body: ${req.body}`)
+  }
+
+  console.log(`[${timestamp}] /api/tx - Final transaction hex: ${typeof txHex === 'string' ? txHex : 'NOT A STRING: ' + JSON.stringify(txHex)}`)
+
+  if (typeof txHex !== 'string' || txHex.length === 0) {
+    console.log(`[${timestamp}] /api/tx - Invalid transaction hex`)
+    return res.status(400).json({
+      error: 'Invalid transaction hex',
+      message: 'Transaction hex must be a non-empty string'
+    })
+  }
+
+  try {
+    const response = await electrs.post('/tx', txHex)
+    console.log(`[${timestamp}] /api/tx - Transaction broadcast successful: ${response.data}`)
+    res.send(response.data)
+  } catch (error) {
+    console.log(`[${timestamp}] /api/tx - Error broadcasting transaction: ${error.message}`)
+    console.log(`[${timestamp}] /api/tx - Failed transaction hex (full): ${txHex}`)
+
+    // Handle specific broadcast errors gracefully
+    if (error.response) {
+      const status = error.response.status
+      const message = error.response.data || error.message
+      console.log(`[${timestamp}] /api/tx - Blockstream API error: ${status} - ${message}`)
+      return res.status(status).json({
+        error: 'Transaction broadcast failed',
+        message: message,
+        status: status
+      })
+    }
+
+    throw error
+  }
+}))
+
 // Health check endpoint (for batch mode)
 if (PROXY_MODE !== 'true') {
   app.get('/health', (req, res) => {
@@ -648,10 +829,12 @@ if (PROXY_MODE !== 'true') {
       service: 'electrs-batch-server',
       version: '1.0.4',
       description: 'Electrs middleware server for batch API calls',
-      endpoints: [
+            endpoints: [
         'POST /addresses - Get address information for multiple addresses',
         'POST /addresses/utxo - Get UTXOs for multiple addresses',
         'POST /addresses/transactions - Get transactions for multiple addresses',
+        'POST /tx - Broadcast raw transaction',
+        'POST /api/tx - Broadcast raw transaction (with /api prefix)',
         'GET /health - Health check endpoint'
       ],
       electrs_url: ELECTRS_URL,
@@ -674,7 +857,7 @@ app.all('/*', function (req, res) {
     res.status(404).json({
       error: '404',
       message: 'Endpoint not found',
-      available_endpoints: ['/addresses', '/addresses/utxo', '/addresses/transactions', '/health']
+      available_endpoints: ['/addresses', '/addresses/utxo', '/addresses/transactions', '/tx', '/api/tx', '/health']
     })
   }
 })
