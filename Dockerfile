@@ -1,8 +1,8 @@
-FROM --platform=linux/amd64 node:14-alpine
+FROM node:14-alpine
 
 WORKDIR /usr/src/electrs-batch-server
 
-COPY package*.json .
+COPY package*.json ./
 
 RUN npm install
 

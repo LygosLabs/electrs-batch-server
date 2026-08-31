@@ -37,7 +37,7 @@ let accessToken = null
 let tokenExpiresAt = 0
 let tokenRequestInProgress = null
 
-async function getAccessToken() {
+async function getAccessToken () {
   if (!BLOCKSTREAM_CLIENT_ID || !BLOCKSTREAM_CLIENT_SECRET) {
     return null
   }
@@ -64,7 +64,7 @@ async function getAccessToken() {
   }
 }
 
-async function performTokenRequest() {
+async function performTokenRequest () {
   try {
     console.log(`[${new Date().toISOString()}] Requesting new Blockstream access token...`)
 
@@ -363,15 +363,15 @@ if (PROXY_MODE === 'true') {
 
   // GET /api/address/:address/txs/chain/:last_seen_txid - Get confirmed transaction history with pagination
   app.get('/api/address/:address/txs/chain/:last_seen_txid', asyncHandler(async (req, res, next) => {
-    const { address, last_seen_txid } = req.params
+    const { address, last_seen_txid: lastSeenTxid } = req.params
     const timestamp = new Date().toISOString()
-    console.log(`[${timestamp}] /api/address/${address}/txs/chain/${last_seen_txid} - Proxy request to Blockstream`)
+    console.log(`[${timestamp}] /api/address/${address}/txs/chain/${lastSeenTxid} - Proxy request to Blockstream`)
 
     try {
-      const response = await electrs.get(`/address/${address}/txs/chain/${last_seen_txid}`)
+      const response = await electrs.get(`/address/${address}/txs/chain/${lastSeenTxid}`)
       res.json(response.data)
     } catch (error) {
-      console.log(`[${timestamp}] /api/address/${address}/txs/chain/${last_seen_txid} - Error: ${error.message}`)
+      console.log(`[${timestamp}] /api/address/${address}/txs/chain/${lastSeenTxid} - Error: ${error.message}`)
       throw error
     }
   }))
@@ -829,7 +829,7 @@ if (PROXY_MODE !== 'true') {
       service: 'electrs-batch-server',
       version: '1.0.4',
       description: 'Electrs middleware server for batch API calls',
-            endpoints: [
+      endpoints: [
         'POST /addresses - Get address information for multiple addresses',
         'POST /addresses/utxo - Get UTXOs for multiple addresses',
         'POST /addresses/transactions - Get transactions for multiple addresses',
@@ -882,5 +882,5 @@ app.listen(PORT, () => {
   console.log(`API Authentication: ${BLOCKSTREAM_CLIENT_ID ? 'ENABLED' : 'DISABLED'}`)
   console.log(`Proxy Mode: ${PROXY_MODE === 'true' ? 'ENABLED' : 'DISABLED'}`)
   console.log(`Time: ${new Date().toISOString()}`)
-  console.log(`=====================================`)
+  console.log('=====================================')
 })

@@ -1,0 +1,120 @@
+name: Build and Deploy
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  ARTIFACT_REGISTRY_LOCATION: us-central1
+  ARTIFACT_REGISTRY_REPO: electrs-batch-server
+  GCP_PROJECT_ID: lygos-infra
+  IMAGE_NAME: electrs-batch-server
+  WIF_PROVIDER: projects/785481412233/locations/global/workloadIdentityPools/github-actions/providers/github
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      - run: npm test
+
+  build-push:
+    name: Build and Push Image
+    if: >-
+      github.ref == 'refs/heads/master' ||
+      startsWith(github.ref, 'refs/tags/v')
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      image_reference: ${{ steps.digest.outputs.image_reference }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: electrs-batch-server-builder@lygos-infra.iam.gserviceaccount.com
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${ARTIFACT_REGISTRY_LOCATION}-docker.pkg.dev"
+
+      - name: Build and push image
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          IMAGE_REPOSITORY="${ARTIFACT_REGISTRY_LOCATION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REGISTRY_REPO}/${IMAGE_NAME}"
+          SHA_TAG="$IMAGE_REPOSITORY:$SOURCE_SHA"
+
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            ALIAS_TAG="$IMAGE_REPOSITORY:$GITHUB_REF_NAME"
+          else
+            ALIAS_TAG="$IMAGE_REPOSITORY:testnet4"
+          fi
+
+          docker build --pull --platform linux/amd64 \
+            --tag "$SHA_TAG" \
+            --tag "$ALIAS_TAG" .
+          docker push "$SHA_TAG"
+          docker push "$ALIAS_TAG"
+
+      - name: Resolve image digest
+        id: digest
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          IMAGE_REPOSITORY="${ARTIFACT_REGISTRY_LOCATION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REGISTRY_REPO}/${IMAGE_NAME}"
+          SHA_TAG="$IMAGE_REPOSITORY:$SOURCE_SHA"
+          DIGEST="$(gcloud artifacts docker images describe "$SHA_TAG" --format='value(image_summary.digest)')"
+
+          if [[ ! "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+            echo "Invalid image digest: $DIGEST" >&2
+            exit 1
+          fi
+
+          echo "image_reference=$IMAGE_REPOSITORY@$DIGEST" >> "$GITHUB_OUTPUT"
+
+  deploy-testnet4:
+    name: Deploy to Testnet4
+    if: github.ref == 'refs/heads/master'
+    needs: build-push
+    permissions:
+      contents: read
+      deployments: write
+      id-token: write
+    uses: LygosLabs/infrastructure/.github/workflows/deploy-service.yml@deploy-v3
+    with:
+      environment: testnet4
+      service: blockstream-proxy
+      image_reference: ${{ needs.build-push.outputs.image_reference }}
+      chart_version: "0.1.0"
+      values_path: deploy/values/testnet4.yaml
+      source_repository: ${{ github.repository }}
+      source_sha: ${{ github.sha }}

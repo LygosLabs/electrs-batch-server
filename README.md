@@ -27,6 +27,13 @@ docker run \
     electrs-batch-server
 ```
 
+### Deployment
+
+Pushes to `master` build an immutable Artifact Registry image and deploy it to
+Testnet4 through the shared Lygos Helm workflow. Version tags matching `v*`
+build the exact tagged commit and publish both commit and version tags; they are
+the release trigger for production deployments.
+
 ### License
 
 [MIT](./LICENSE.md)
