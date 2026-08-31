@@ -68,11 +68,11 @@ jobs:
           VALUES_PATH: ${{ inputs.values_path }}
         run: |
           case "$TARGET_ENVIRONMENT" in
-            staging|testnet4|production) ;;
+            testnet4|production) ;;
             *) echo "Unsupported environment: $TARGET_ENVIRONMENT" >&2; exit 1 ;;
           esac
-          if [ "$TARGET_ENVIRONMENT" = "production" ] && [ "$GITHUB_REF" != "refs/heads/master" ]; then
-            echo "Production deployments must run from the caller's master branch" >&2
+          if [ "$TARGET_ENVIRONMENT" = "production" ] && [[ "$GITHUB_REF" != refs/tags/v* ]]; then
+            echo "Production deployments must run from a version tag" >&2
             exit 1
           fi
 
@@ -103,7 +103,7 @@ jobs:
 
           validate_image_repository() {
             case "$1" in
-              us-central1-docker.pkg.dev/lygos-infra/*|us-central1-docker.pkg.dev/lygos-staging/*|us-central1-docker.pkg.dev/lygos-testnet4/*|us-central1-docker.pkg.dev/lygos-production/*|mblackmblack/electrs-batch-server) ;;
+              us-central1-docker.pkg.dev/lygos-infra/electrs-batch-server/electrs-batch-server) ;;
               *) echo "Image repository is not an approved Lygos source: $1" >&2; exit 1 ;;
             esac
           }
@@ -139,13 +139,6 @@ jobs:
           TARGET_ENVIRONMENT: ${{ inputs.environment }}
         run: |
           case "$TARGET_ENVIRONMENT" in
-            staging)
-              {
-                echo "project=lygos-staging"
-                echo "membership=lygos-staging-uscentral1"
-                echo "service_account=gha-deployer@lygos-staging.iam.gserviceaccount.com"
-              } >> "$GITHUB_OUTPUT"
-              ;;
             testnet4)
               {
                 echo "project=lygos-testnet4"
@@ -269,45 +262,3 @@ jobs:
             --selector "app.kubernetes.io/instance=$SERVICE" \
             --namespace "$NAMESPACE" \
             --timeout 10m
-          helm status "$SERVICE" --namespace "$NAMESPACE"
-
-      - name: Deployment diagnostics
-        if: failure()
-        env:
-          SERVICE: ${{ inputs.service }}
-        run: |
-          helm status "$SERVICE" --namespace "$NAMESPACE" || true
-          kubectl get deployments,replicasets,pods \
-            --selector "app.kubernetes.io/instance=$SERVICE" \
-            --namespace "$NAMESPACE" \
-            --output wide || true
-          kubectl describe deployments \
-            --selector "app.kubernetes.io/instance=$SERVICE" \
-            --namespace "$NAMESPACE" || true
-          kubectl get events \
-            --namespace "$NAMESPACE" \
-            --sort-by=.lastTimestamp || true
-
-      - name: Record deployment
-        if: always()
-        env:
-          CHART_VERSION: ${{ inputs.chart_version }}
-          IMAGE_REFERENCE: ${{ inputs.image_reference }}
-          JOB_STATUS: ${{ job.status }}
-          SERVICE: ${{ inputs.service }}
-          SOURCE_REPOSITORY: ${{ inputs.source_repository }}
-          SOURCE_SHA: ${{ inputs.source_sha }}
-          TARGET_ENVIRONMENT: ${{ inputs.environment }}
-        run: |
-          {
-            echo "## Fixed-environment deployment"
-            echo
-            echo "| Field | Value |"
-            echo "| --- | --- |"
-            echo "| Status | \`$JOB_STATUS\` |"
-            echo "| Environment | \`$TARGET_ENVIRONMENT\` |"
-            echo "| Release | \`$SERVICE\` |"
-            echo "| Chart | \`lygos-service $CHART_VERSION\` |"
-            echo "| Image | \`$IMAGE_REFERENCE\` |"
-            echo "| Source | \`$SOURCE_REPOSITORY@$SOURCE_SHA\` |"
-          } >> "$GITHUB_STEP_SUMMARY"
