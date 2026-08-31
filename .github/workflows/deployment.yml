@@ -109,7 +109,7 @@ jobs:
       contents: read
       deployments: write
       id-token: write
-    uses: LygosLabs/infrastructure/.github/workflows/deploy-service.yml@deploy-v3
+    uses: ./.github/workflows/deploy-service.yml
     with:
       environment: testnet4
       service: blockstream-proxy
