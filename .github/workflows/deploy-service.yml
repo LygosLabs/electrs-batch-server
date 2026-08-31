@@ -143,7 +143,7 @@ jobs:
                 echo "project=lygos-testnet4"
                 echo "membership=lygos-testnet4-uscentral1"
                 echo "service_account=electrs-batch-server-deployer@lygos-testnet4.iam.gserviceaccount.com"
-                echo "wif_provider=projects/785481412233/locations/global/workloadIdentityPools/electrs-testnet4-deployer/providers/github"
+                echo "wif_provider=projects/785481412233/locations/global/workloadIdentityPools/batch-server-testnet4-deployer/providers/github"
               } >> "$GITHUB_OUTPUT"
               ;;
             production)
@@ -151,7 +151,7 @@ jobs:
                 echo "project=lygos-production"
                 echo "membership=lygos-production-uscentral1"
                 echo "service_account=electrs-batch-server-deployer@lygos-production.iam.gserviceaccount.com"
-                echo "wif_provider=projects/785481412233/locations/global/workloadIdentityPools/electrs-production-deployer/providers/github"
+                echo "wif_provider=projects/785481412233/locations/global/workloadIdentityPools/batch-server-production-deployer/providers/github"
               } >> "$GITHUB_OUTPUT"
               ;;
             *) echo "Deployment target is not configured: $TARGET_ENVIRONMENT" >&2; exit 1 ;;
