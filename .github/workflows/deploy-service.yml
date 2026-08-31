@@ -66,12 +66,8 @@ jobs:
           TARGET_SERVICE: ${{ inputs.service }}
           VALUES_PATH: ${{ inputs.values_path }}
         run: |
-          case "$TARGET_ENVIRONMENT" in
-            testnet4|production) ;;
-            *) echo "Unsupported environment: $TARGET_ENVIRONMENT" >&2; exit 1 ;;
-          esac
-          if [ "$TARGET_ENVIRONMENT" = "production" ] && [[ "$GITHUB_REF" != refs/tags/v* ]]; then
-            echo "Production deployments must run from a version tag" >&2
+          if [ "$TARGET_ENVIRONMENT" != "testnet4" ]; then
+            echo "Unsupported environment: $TARGET_ENVIRONMENT" >&2
             exit 1
           fi
 
@@ -89,10 +85,6 @@ jobs:
           fi
           if [[ ! "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]; then
             echo "Source SHA must be a full lowercase commit SHA" >&2
-            exit 1
-          fi
-          if [ "$TARGET_ENVIRONMENT" = "production" ] && [ "$SOURCE_SHA" != "$GITHUB_SHA" ]; then
-            echo "Production source SHA must match the caller's current commit" >&2
             exit 1
           fi
           if [[ "$VALUES_PATH" = /* || "$VALUES_PATH" = ".." || "$VALUES_PATH" = ../* || "$VALUES_PATH" = */../* || "$VALUES_PATH" = */.. ]]; then
@@ -144,14 +136,6 @@ jobs:
                 echo "membership=lygos-testnet4-uscentral1"
                 echo "service_account=electrs-batch-server-deployer@lygos-testnet4.iam.gserviceaccount.com"
                 echo "wif_provider=projects/785481412233/locations/global/workloadIdentityPools/batch-server-testnet4-deployer/providers/github"
-              } >> "$GITHUB_OUTPUT"
-              ;;
-            production)
-              {
-                echo "project=lygos-production"
-                echo "membership=lygos-production-uscentral1"
-                echo "service_account=electrs-batch-server-deployer@lygos-production.iam.gserviceaccount.com"
-                echo "wif_provider=projects/785481412233/locations/global/workloadIdentityPools/batch-server-production-deployer/providers/github"
               } >> "$GITHUB_OUTPUT"
               ;;
             *) echo "Deployment target is not configured: $TARGET_ENVIRONMENT" >&2; exit 1 ;;
