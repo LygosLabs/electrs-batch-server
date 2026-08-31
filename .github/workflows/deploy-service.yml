@@ -54,7 +54,6 @@ jobs:
       NAMESPACE: lygos
       OCI_CHART: oci://us-central1-docker.pkg.dev/lygos-infra/helm-charts/lygos-service
       OCI_HOST: us-central1-docker.pkg.dev
-      WIF_PROVIDER: projects/785481412233/locations/global/workloadIdentityPools/github-actions/providers/github
     steps:
       - name: Validate inputs
         id: inputs
@@ -143,14 +142,16 @@ jobs:
               {
                 echo "project=lygos-testnet4"
                 echo "membership=lygos-testnet4-uscentral1"
-                echo "service_account=gha-deployer@lygos-testnet4.iam.gserviceaccount.com"
+                echo "service_account=electrs-batch-server-deployer@lygos-testnet4.iam.gserviceaccount.com"
+                echo "wif_provider=projects/785481412233/locations/global/workloadIdentityPools/electrs-testnet4-deployer/providers/github"
               } >> "$GITHUB_OUTPUT"
               ;;
             production)
               {
                 echo "project=lygos-production"
                 echo "membership=lygos-production-uscentral1"
-                echo "service_account=gha-deployer@lygos-production.iam.gserviceaccount.com"
+                echo "service_account=electrs-batch-server-deployer@lygos-production.iam.gserviceaccount.com"
+                echo "wif_provider=projects/785481412233/locations/global/workloadIdentityPools/electrs-production-deployer/providers/github"
               } >> "$GITHUB_OUTPUT"
               ;;
             *) echo "Deployment target is not configured: $TARGET_ENVIRONMENT" >&2; exit 1 ;;
@@ -181,7 +182,7 @@ jobs:
         name: Authenticate to Google Cloud
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
-          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          workload_identity_provider: ${{ steps.target.outputs.wif_provider }}
           service_account: ${{ steps.target.outputs.service_account }}
 
       - name: Set up gcloud
