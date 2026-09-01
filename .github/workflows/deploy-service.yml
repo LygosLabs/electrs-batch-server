@@ -1,0 +1,249 @@
+name: deploy Lygos service
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: Fixed environment to deploy to
+        required: true
+        type: string
+      service:
+        description: Helm release and service name
+        required: true
+        type: string
+      image_reference:
+        description: Container image tag or digest reference
+        required: true
+        type: string
+      chart_version:
+        description: Published lygos-service chart version
+        required: true
+        type: string
+      values_path:
+        description: Values file in the calling repository
+        required: true
+        type: string
+      source_repository:
+        description: Calling repository in owner/name form
+        required: true
+        type: string
+      source_sha:
+        description: Calling repository commit to deploy
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  deployments: write
+  id-token: write
+
+jobs:
+  deploy:
+    name: deploy ${{ inputs.service }} to ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment }}
+    concurrency:
+      group: deploy-${{ inputs.environment }}-${{ inputs.service }}
+      cancel-in-progress: false
+    env:
+      FLEET_LOCATION: us-central1
+      HELM_DRIVER: configmap
+      HELM_SHA256: e9b88b4ee95b18c706839c28d3a0220e5bc470e9cd9262410c90793c45ff8b7c
+      HELM_VERSION: v4.2.3
+      NAMESPACE: lygos
+      OCI_CHART: oci://us-central1-docker.pkg.dev/lygos-infra/helm-charts/lygos-service
+      OCI_HOST: us-central1-docker.pkg.dev
+    steps:
+      - name: Validate inputs
+        id: inputs
+        env:
+          CHART_VERSION: ${{ inputs.chart_version }}
+          IMAGE_REFERENCE: ${{ inputs.image_reference }}
+          SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          TARGET_ENVIRONMENT: ${{ inputs.environment }}
+          TARGET_SERVICE: ${{ inputs.service }}
+          VALUES_PATH: ${{ inputs.values_path }}
+        run: |
+          if [ "$TARGET_ENVIRONMENT" != "testnet4" ]; then
+            echo "Unsupported environment: $TARGET_ENVIRONMENT" >&2
+            exit 1
+          fi
+
+          if [[ ! "$TARGET_SERVICE" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; then
+            echo "Service must be a lowercase Kubernetes DNS label" >&2
+            exit 1
+          fi
+          if [[ ! "$CHART_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+            echo "Chart version must be an explicit semantic version" >&2
+            exit 1
+          fi
+          if [ "$SOURCE_REPOSITORY" != "$GITHUB_REPOSITORY" ]; then
+            echo "Source repository must match the calling repository" >&2
+            exit 1
+          fi
+          if [[ ! "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "Source SHA must be a full lowercase commit SHA" >&2
+            exit 1
+          fi
+          if [[ "$VALUES_PATH" = /* || "$VALUES_PATH" = ".." || "$VALUES_PATH" = ../* || "$VALUES_PATH" = */../* || "$VALUES_PATH" = */.. ]]; then
+            echo "Values path must stay within the calling repository" >&2
+            exit 1
+          fi
+
+          validate_image_repository() {
+            case "$1" in
+              us-central1-docker.pkg.dev/lygos-infra/electrs-batch-server/electrs-batch-server) ;;
+              *) echo "Image repository is not an approved Lygos source: $1" >&2; exit 1 ;;
+            esac
+          }
+
+          if [[ "$IMAGE_REFERENCE" =~ ^([a-z0-9][a-z0-9./_-]*)@(sha256:[a-f0-9]{64})$ ]]; then
+            validate_image_repository "${BASH_REMATCH[1]}"
+            {
+              echo "image_repository=${BASH_REMATCH[1]}"
+              echo "image_digest=${BASH_REMATCH[2]}"
+              echo "image_tag="
+              echo "image_pull_policy=IfNotPresent"
+            } >> "$GITHUB_OUTPUT"
+          elif [[ "$IMAGE_REFERENCE" =~ ^([a-z0-9][a-z0-9./_-]*):([A-Za-z0-9_][A-Za-z0-9_.-]{0,127})$ ]]; then
+            if [ "${BASH_REMATCH[2]}" = "latest" ]; then
+              echo "The latest image tag is not deployable" >&2
+              exit 1
+            fi
+            validate_image_repository "${BASH_REMATCH[1]}"
+            {
+              echo "image_repository=${BASH_REMATCH[1]}"
+              echo "image_digest="
+              echo "image_tag=${BASH_REMATCH[2]}"
+              echo "image_pull_policy=Always"
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "Image reference must contain an explicit tag or sha256 digest" >&2
+            exit 1
+          fi
+
+      - name: Select deployment target
+        id: target
+        env:
+          TARGET_ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          case "$TARGET_ENVIRONMENT" in
+            testnet4)
+              {
+                echo "project=lygos-testnet4"
+                echo "membership=lygos-testnet4-uscentral1"
+                echo "service_account=electrs-batch-server-deployer@lygos-testnet4.iam.gserviceaccount.com"
+                echo "wif_provider=projects/785481412233/locations/global/workloadIdentityPools/batch-server-testnet4-deployer/providers/github"
+              } >> "$GITHUB_OUTPUT"
+              ;;
+            *) echo "Deployment target is not configured: $TARGET_ENVIRONMENT" >&2; exit 1 ;;
+          esac
+
+      - name: Check out deployment source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.source_repository }}
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+
+      - name: Verify values file
+        env:
+          VALUES_PATH: ${{ inputs.values_path }}
+        run: |
+          if [ ! -f "$VALUES_PATH" ]; then
+            echo "Values path is not a regular file: $VALUES_PATH" >&2
+            exit 1
+          fi
+          resolved_path=$(realpath --canonicalize-existing "$VALUES_PATH")
+          case "$resolved_path" in
+            "$GITHUB_WORKSPACE"/*) ;;
+            *) echo "Values path resolves outside the calling repository" >&2; exit 1 ;;
+          esac
+
+      - id: auth
+        name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ steps.target.outputs.wif_provider }}
+          service_account: ${{ steps.target.outputs.service_account }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+        with:
+          project_id: ${{ steps.target.outputs.project }}
+          install_components: gke-gcloud-auth-plugin
+
+      - name: Install Helm
+        run: |
+          archive="helm-${HELM_VERSION}-linux-amd64.tar.gz"
+          curl --fail --location --show-error --silent \
+            --output "$archive" \
+            "https://get.helm.sh/${archive}"
+          printf '%s  %s\n' "$HELM_SHA256" "$archive" | sha256sum --check --strict
+          tar xzf "$archive"
+          sudo mv linux-amd64/helm /usr/local/bin/
+
+      - name: Configure cluster access
+        env:
+          FLEET_MEMBERSHIP: ${{ steps.target.outputs.membership }}
+          GCP_PROJECT_ID: ${{ steps.target.outputs.project }}
+        run: |
+          gcloud container fleet memberships get-credentials \
+            "$FLEET_MEMBERSHIP" \
+            --project "$GCP_PROJECT_ID" \
+            --location "$FLEET_LOCATION"
+          kubectl config set-context --current --namespace="$NAMESPACE"
+
+      - name: Log in to Artifact Registry
+        run: |
+          gcloud auth print-access-token | helm registry login \
+            --username oauth2accesstoken \
+            --password-stdin \
+            "$OCI_HOST"
+
+      - name: Deploy service
+        env:
+          CHART_VERSION: ${{ inputs.chart_version }}
+          IMAGE_DIGEST: ${{ steps.inputs.outputs.image_digest }}
+          IMAGE_REFERENCE: ${{ inputs.image_reference }}
+          IMAGE_REPOSITORY: ${{ steps.inputs.outputs.image_repository }}
+          IMAGE_TAG: ${{ steps.inputs.outputs.image_tag }}
+          IMAGE_PULL_POLICY: ${{ steps.inputs.outputs.image_pull_policy }}
+          SERVICE: ${{ inputs.service }}
+          SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          TARGET_ENVIRONMENT: ${{ inputs.environment }}
+          VALUES_PATH: ${{ inputs.values_path }}
+        run: |
+          # A unique pod template resets a prior ProgressDeadlineExceeded condition on retry.
+          helm upgrade --install "$SERVICE" "$OCI_CHART" \
+            --version "$CHART_VERSION" \
+            --namespace "$NAMESPACE" \
+            --values "$VALUES_PATH" \
+            --force-conflicts \
+            --set-string "image.repository=$IMAGE_REPOSITORY" \
+            --set-string "image.tag=$IMAGE_TAG" \
+            --set-string "image.digest=$IMAGE_DIGEST" \
+            --set-string "image.pullPolicy=$IMAGE_PULL_POLICY" \
+            --set-string "deployment.annotations.lygos\.finance/environment=$TARGET_ENVIRONMENT" \
+            --set-string "deployment.annotations.lygos\.finance/source-repository=$SOURCE_REPOSITORY" \
+            --set-string "deployment.annotations.lygos\.finance/source-sha=$SOURCE_SHA" \
+            --set-string "deployment.annotations.lygos\.finance/image-reference=$IMAGE_REFERENCE" \
+            --set-string "deployment.annotations.lygos\.finance/chart-version=$CHART_VERSION" \
+            --set-string "podAnnotations.lygos\.finance/environment=$TARGET_ENVIRONMENT" \
+            --set-string "podAnnotations.lygos\.finance/source-repository=$SOURCE_REPOSITORY" \
+            --set-string "podAnnotations.lygos\.finance/source-sha=$SOURCE_SHA" \
+            --set-string "podAnnotations.lygos\.finance/image-reference=$IMAGE_REFERENCE" \
+            --set-string "podAnnotations.lygos\.finance/chart-version=$CHART_VERSION" \
+            --set-string "podAnnotations.lygos\.finance/deployment-attempt=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            --description "repo=$SOURCE_REPOSITORY sha=$SOURCE_SHA image=$IMAGE_REFERENCE chart=$CHART_VERSION" \
+            --wait \
+            --timeout 10m \
+            --history-max 10
+
+          kubectl rollout status deployment \
+            --selector "app.kubernetes.io/instance=$SERVICE" \
+            --namespace "$NAMESPACE" \
+            --timeout 10m
