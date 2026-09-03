@@ -30,9 +30,9 @@ docker run \
 ### Deployment
 
 Pushes to `master` build an immutable Artifact Registry image and deploy it to
-Testnet4 through the shared Lygos Helm workflow. Version tags matching `v*`
-build the exact tagged commit and publish both commit and version tags; they are
-the release trigger for production deployments.
+Testnet4 through the repository's Helm workflow. Version tags matching `v*`
+build the exact tagged commit, publish both commit and version tags, and deploy
+that immutable image digest to production.
 
 ### License
 

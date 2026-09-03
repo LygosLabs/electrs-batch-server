@@ -118,3 +118,21 @@ jobs:
       values_path: deploy/values/testnet4.yaml
       source_repository: ${{ github.repository }}
       source_sha: ${{ github.sha }}
+
+  deploy-production:
+    name: Deploy to Production
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build-push
+    permissions:
+      contents: read
+      deployments: write
+      id-token: write
+    uses: ./.github/workflows/deploy-service.yml
+    with:
+      environment: production
+      service: blockstream-proxy
+      image_reference: ${{ needs.build-push.outputs.image_reference }}
+      chart_version: "0.1.0"
+      values_path: deploy/values/production.yaml
+      source_repository: ${{ github.repository }}
+      source_sha: ${{ github.sha }}

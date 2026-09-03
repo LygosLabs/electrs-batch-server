@@ -1,0 +1,109 @@
+nameOverride: blockstream-proxy
+fullnameOverride: blockstream-proxy
+
+replicaCount: 2
+
+image:
+  repository: us-central1-docker.pkg.dev/lygos-infra/electrs-batch-server/electrs-batch-server
+  tag: production
+  pullPolicy: Always
+
+serviceAccount:
+  create: true
+  name: blockstream-proxy
+
+deployment:
+  labels:
+    app: blockstream-proxy-deployment
+  selectorLabels:
+    app: blockstream-proxy-deployment
+  container:
+    name: blockstream-proxy
+    ports:
+      - containerPort: 8080
+    env:
+      - name: PORT
+        value: "8080"
+      - name: ELECTRS_URL
+        value: http://electrs.mempool.svc.cluster.local:3000
+      - name: CONCURRENCY
+        value: "10"
+      - name: PROXY_MODE
+        value: "true"
+    readinessProbe:
+      httpGet:
+        path: /health
+        port: 8080
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 6
+    resources:
+      requests:
+        memory: 256Mi
+        cpu: 100m
+      limits:
+        memory: 512Mi
+        cpu: 250m
+
+podLabels:
+  app: blockstream-proxy-deployment
+
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    minDomains: 2
+    whenUnsatisfiable: DoNotSchedule
+    labelSelector:
+      matchLabels:
+        app: blockstream-proxy-deployment
+
+service:
+  enabled: true
+  name: blockstream-proxy-service
+  selector:
+    app: blockstream-proxy-deployment
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 8080
+      name: blockstream-proxy
+
+httpRoute:
+  enabled: true
+  name: blockstream-proxy
+  parentRefs:
+    - name: external
+      namespace: gateway-system
+  hostnames:
+    - node.lygos.finance
+    - node.atomic.finance
+  rules:
+    - backendRefs:
+        - name: blockstream-proxy-service
+          port: 8080
+
+backendPolicy:
+  enabled: true
+  name: blockstream-proxy-service
+  spec:
+    default:
+      securityPolicy: lygos-production-edge-security
+
+healthCheckPolicy:
+  enabled: true
+  name: blockstream-proxy-service
+  spec:
+    default:
+      config:
+        type: HTTP
+        httpHealthCheck:
+          port: 8080
+          requestPath: /health
+
+podDisruptionBudget:
+  enabled: true
+  name: blockstream-proxy
+  minAvailable: 1
+  selector:
+    app: blockstream-proxy-deployment
